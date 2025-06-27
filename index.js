@@ -22,7 +22,12 @@ const PORT = process.env.PORT || 5001;
 
 // CORS'u en üste al
 app.use(cors({
-  origin: process.env.CORS_ORIGIN || 'http://localhost:5173',
+  origin: [
+    'http://localhost:5173',
+    'https://aksumetal.com',
+    'https://www.aksumetal.com',
+    'https://aksumetal.onrender.com',
+  ],
   credentials: true
 }));
 app.options('*', cors());
@@ -52,7 +57,12 @@ const loginLimiter = rateLimit({
 app.use('/api/auth/login', loginLimiter);
 
 app.use(express.json({ limit: '10mb' })); // JSON boyut limiti
-app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
+app.use('/uploads', express.static(path.join(__dirname, 'uploads'), {
+  setHeaders: (res, path) => {
+    res.set('Access-Control-Allow-Origin', '*'); // Gerekirse sadece domainleri yazabilirsin
+    res.set('Access-Control-Allow-Credentials', 'true');
+  }
+}));
 
 // Güvenli dosya yükleme ayarları
 const storage = multer.diskStorage({
