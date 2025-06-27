@@ -17,6 +17,7 @@ const Log = require('./models/logModel');
 const SiteSettings = require('./models/siteSettingsModel');
 
 const app = express();
+app.set('trust proxy', 1);
 const PORT = process.env.PORT || 5001;
 
 // CORS'u en üste al
