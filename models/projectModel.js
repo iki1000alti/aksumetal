@@ -11,7 +11,16 @@ const projectSchema = new mongoose.Schema({
   },
   imageUrl: {
     type: String,
-    required: true,
+    required: false,
+  },
+  imageUrls: {
+    type: [String],
+    required: false,
+    default: []
+  },
+  defaultImage: {
+    type: String,
+    required: false,
   },
   createdBy: {
     type: String,

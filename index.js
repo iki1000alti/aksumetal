@@ -33,7 +33,7 @@ const allowedOrigins = [
 
 // CORS'u en üste al
 app.use(cors({
-  origin: 'https://aksumetal.com',
+  origin: allowedOrigins,
   credentials: true // Eğer cookie kullanıyorsanız
 }));
 app.options('*', cors());
@@ -137,19 +137,28 @@ app.get('/api/projects/:id', async (req, res) => {
     }
 });
 
-// POST: Yeni Proje Ekle (GÜNCELLENDİ)
-app.post('/api/projects', protect, upload.single('image'), async (req, res) => {
-  const { title, description, category } = req.body;
-  if (!title || !description || !category || !req.file) {
-    return res.status(400).json({ message: 'Lütfen tüm alanları doldurun.' });
+// POST: Yeni Proje Ekle (ÇOKLU RESİM DESTEKLİ)
+app.post('/api/projects', protect, upload.array('images', 10), async (req, res) => {
+  const { title, description, category, defaultImage, defaultImageIndex } = req.body;
+  if (!title || !description || !category || !req.files || req.files.length === 0) {
+    return res.status(400).json({ message: 'Lütfen tüm alanları ve en az bir resim ekleyin.' });
   }
   try {
+    const imageUrls = req.files.map(file => file.path); // Cloudinary URL'leri
+    let defaultImg = imageUrls[0];
+    if (typeof defaultImageIndex !== 'undefined' && !isNaN(Number(defaultImageIndex)) && imageUrls[Number(defaultImageIndex)]) {
+      defaultImg = imageUrls[Number(defaultImageIndex)];
+    } else if (defaultImage && imageUrls.includes(defaultImage)) {
+      defaultImg = defaultImage;
+    }
     const newProject = await Project.create({
       title: sanitizeInput(title),
       description: sanitizeInput(description),
       category: sanitizeInput(category),
-      imageUrl: req.file.path, // Cloudinary URL'si
-      createdBy: req.user.username, // Kullanıcı adını kaydet
+      imageUrls,
+      defaultImage: defaultImg,
+      imageUrl: defaultImg, // Eski frontend desteği için
+      createdBy: req.user.username,
     });
     await Log.create({ user: req.user.username, action: 'create_project', target: newProject._id.toString(), details: `Proje oluşturuldu: ${title}` });
     res.status(201).json(newProject);
@@ -158,28 +167,49 @@ app.post('/api/projects', protect, upload.single('image'), async (req, res) => {
   }
 });
 
-// YENİ - PUT: Proje Düzenle
-app.put('/api/projects/:id', protect, upload.single('image'), async (req, res) => {
-    try {
-        const { title, description, category } = req.body;
-        const project = await Project.findById(req.params.id);
-        if (!project) {
-            return res.status(404).json({ message: 'Proje bulunamadı' });
-        }
-        const updatedData = {
-            title: sanitizeInput(title) || project.title,
-            description: sanitizeInput(description) || project.description,
-            category: sanitizeInput(category) || project.category,
-        };
-        if (req.file) {
-            updatedData.imageUrl = req.file.path; // Cloudinary URL'si
-        }
-        const updatedProject = await Project.findByIdAndUpdate(req.params.id, updatedData, { new: true });
-        await Log.create({ user: req.user.username, action: 'update_project', target: req.params.id, details: `Proje güncellendi: ${updatedProject.title}` });
-        res.json(updatedProject);
-    } catch (error) {
-        res.status(500).json({ message: 'Proje güncellenirken bir hata oluştu.' });
+// PUT: Proje Düzenle (ÇOKLU RESİM DESTEKLİ)
+app.put('/api/projects/:id', protect, upload.array('images', 10), async (req, res) => {
+  try {
+    const { title, description, category, defaultImage } = req.body;
+    let existingImages = req.body.existingImages;
+    if (existingImages && !Array.isArray(existingImages)) {
+      existingImages = [existingImages];
     }
+    const project = await Project.findById(req.params.id);
+    if (!project) {
+      return res.status(404).json({ message: 'Proje bulunamadı' });
+    }
+    // Silinen eski resimleri Cloudinary'den kaldır
+    if (Array.isArray(existingImages)) {
+      const toDelete = (project.imageUrls || []).filter(url => !existingImages.includes(url));
+      for (const url of toDelete) {
+        // Cloudinary public_id'yi URL'den çek
+        const publicId = url.split('/').slice(-2).join('/').split('.')[0];
+        try { await cloudinary.uploader.destroy(publicId); } catch (e) { /* ignore */ }
+      }
+    }
+    // Yeni resimleri ekle
+    let imageUrls = Array.isArray(existingImages) ? [...existingImages] : (project.imageUrls || []);
+    if (req.files && req.files.length > 0) {
+      const newImageUrls = req.files.map(file => file.path);
+      imageUrls = imageUrls.concat(newImageUrls);
+    }
+    // Varsayılan fotoğrafı belirle
+    let defaultImg = defaultImage && imageUrls.includes(defaultImage) ? defaultImage : imageUrls[0];
+    const updatedData = {
+      title: sanitizeInput(title) || project.title,
+      description: sanitizeInput(description) || project.description,
+      category: sanitizeInput(category) || project.category,
+      imageUrls,
+      defaultImage: defaultImg,
+      imageUrl: defaultImg,
+    };
+    const updatedProject = await Project.findByIdAndUpdate(req.params.id, updatedData, { new: true });
+    await Log.create({ user: req.user.username, action: 'update_project', target: req.params.id, details: `Proje güncellendi: ${updatedProject.title}` });
+    res.json(updatedProject);
+  } catch (error) {
+    res.status(500).json({ message: 'Proje güncellenirken bir hata oluştu.' });
+  }
 });
 
 // DELETE: Proje Sil
@@ -202,6 +232,24 @@ app.delete('/api/projects/:id', protect, async (req, res) => {
   }
 });
 
+// Tüm projeleri sil
+app.delete('/api/projects', protect, async (req, res) => {
+  try {
+    const projects = await Project.find({});
+    for (const project of projects) {
+      for (const url of (project.imageUrls || [])) {
+        const publicId = url.split('/').slice(-2).join('/').split('.')[0];
+        try { await cloudinary.uploader.destroy(publicId); } catch (e) { /* ignore */ }
+      }
+    }
+    await Project.deleteMany({});
+    await Log.create({ user: req.user.username, action: 'delete_all_projects', details: 'Tüm projeler silindi' });
+    res.json({ message: 'Tüm projeler ve resimleri silindi.' });
+  } catch (error) {
+    res.status(500).json({ message: 'Projeler silinirken bir hata oluştu.' });
+  }
+});
+
 // Proje beğen (like) endpointi
 app.post('/api/projects/:id/like', async (req, res) => {
   try {
@@ -212,6 +260,19 @@ app.post('/api/projects/:id/like', async (req, res) => {
     res.json({ likes: project.likes });
   } catch (error) {
     res.status(500).json({ message: 'Beğeni artırılırken hata oluştu.' });
+  }
+});
+
+// Proje beğenisini geri al (unlike) endpointi
+app.post('/api/projects/:id/unlike', async (req, res) => {
+  try {
+    const project = await Project.findById(req.params.id);
+    if (!project) return res.status(404).json({ message: 'Proje bulunamadı' });
+    project.likes = Math.max((project.likes || 0) - 1, 0);
+    await project.save();
+    res.json({ likes: project.likes });
+  } catch (error) {
+    res.status(500).json({ message: 'Beğeni azaltılırken hata oluştu.' });
   }
 });
 
@@ -428,7 +489,7 @@ app.get('/api/site-settings', async (req, res) => {
     let settings = await SiteSettings.findOne();
     if (!settings) {
       // Varsayılan ayar yoksa oluştur
-      settings = await SiteSettings.create({ siteName: 'DEMİR METAL' });
+      settings = await SiteSettings.create({ siteName: 'AKSU METAL' });
     }
     res.json(settings);
   } catch (error) {
