@@ -63,10 +63,6 @@ const loginLimiter = rateLimit({
 app.use('/api/auth/login', loginLimiter);
 
 app.use(express.json({ limit: '10mb' })); // JSON boyut limiti
-app.use('/uploads', (req, res, next) => {
-  res.header('Access-Control-Allow-Origin', '*'); // veya sadece kendi domaininiz
-  next();
-}, express.static('uploads'));
 
 // Cloudinary config
 cloudinary.config({
@@ -193,11 +189,11 @@ app.delete('/api/projects/:id', protect, async (req, res) => {
     if (!project) {
       return res.status(404).json({ message: 'Proje bulunamadı' });
     }
-    // Eski resmi sunucudan sil
-    const imagePath = path.join(__dirname, project.imageUrl);
-    if (fs.existsSync(imagePath)) {
-        fs.unlinkSync(imagePath);
-    }
+    // Eski resmi sunucudan sil (Artık gerek yok)
+    // const imagePath = path.join(__dirname, project.imageUrl);
+    // if (fs.existsSync(imagePath)) {
+    //     fs.unlinkSync(imagePath);
+    // }
     await Project.deleteOne({ _id: req.params.id });
     await Log.create({ user: req.user.username, action: 'delete_project', target: req.params.id, details: `Proje silindi: ${project.title}` });
     res.json({ message: 'Proje başarıyla silindi' });
