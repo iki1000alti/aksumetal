@@ -8,6 +8,8 @@ const mongoose = require('mongoose');
 const fs = require('fs'); // Eski resimleri silmek için
 const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
+const cloudinary = require('cloudinary').v2;
+const { CloudinaryStorage } = require('multer-storage-cloudinary');
 require('dotenv').config();
 
 const Project = require('./models/projectModel');
@@ -61,20 +63,24 @@ const loginLimiter = rateLimit({
 app.use('/api/auth/login', loginLimiter);
 
 app.use(express.json({ limit: '10mb' })); // JSON boyut limiti
-app.use('/uploads', express.static(path.join(__dirname, 'uploads'), {
-  setHeaders: (res, path) => {
-    res.set('Access-Control-Allow-Origin', '*');
-  }
-}));
+app.use('/uploads', (req, res, next) => {
+  res.header('Access-Control-Allow-Origin', '*'); // veya sadece kendi domaininiz
+  next();
+}, express.static('uploads'));
 
-// Güvenli dosya yükleme ayarları
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => cb(null, 'uploads/'),
-  filename: (req, file, cb) => {
-    // Dosya adını güvenli hale getir
-    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
-    const ext = path.extname(file.originalname);
-    cb(null, uniqueSuffix + ext);
+// Cloudinary config
+cloudinary.config({
+  cloud_name: process.env.CLOUDINARY_CLOUD_NAME || 'CLOUD_NAME',
+  api_key: process.env.CLOUDINARY_API_KEY || 'API_KEY',
+  api_secret: process.env.CLOUDINARY_API_SECRET || 'API_SECRET',
+});
+
+const storage = new CloudinaryStorage({
+  cloudinary: cloudinary,
+  params: {
+    folder: 'aksumetal_uploads',
+    allowed_formats: ['jpg', 'jpeg', 'png', 'webp'],
+    transformation: [{ width: 1200, height: 800, crop: "limit" }],
   },
 });
 
@@ -146,7 +152,7 @@ app.post('/api/projects', protect, upload.single('image'), async (req, res) => {
       title: sanitizeInput(title),
       description: sanitizeInput(description),
       category: sanitizeInput(category),
-      imageUrl: `/uploads/${req.file.filename}`,
+      imageUrl: req.file.path, // Cloudinary URL'si
       createdBy: req.user.username, // Kullanıcı adını kaydet
     });
     await Log.create({ user: req.user.username, action: 'create_project', target: newProject._id.toString(), details: `Proje oluşturuldu: ${title}` });
@@ -170,11 +176,7 @@ app.put('/api/projects/:id', protect, upload.single('image'), async (req, res) =
             category: sanitizeInput(category) || project.category,
         };
         if (req.file) {
-            const oldImagePath = path.join(__dirname, project.imageUrl);
-            if (fs.existsSync(oldImagePath)) {
-                fs.unlinkSync(oldImagePath);
-            }
-            updatedData.imageUrl = `/uploads/${req.file.filename}`;
+            updatedData.imageUrl = req.file.path; // Cloudinary URL'si
         }
         const updatedProject = await Project.findByIdAndUpdate(req.params.id, updatedData, { new: true });
         await Log.create({ user: req.user.username, action: 'update_project', target: req.params.id, details: `Proje güncellendi: ${updatedProject.title}` });
@@ -486,7 +488,7 @@ app.put('/api/site-settings', protect, async (req, res) => {
 // Slider görseli yükleme endpointi
 app.post('/api/site-settings/slider-upload', protect, upload.single('image'), (req, res) => {
   if (!req.file) return res.status(400).json({ message: 'Dosya yüklenemedi' });
-  res.json({ imageUrl: `/uploads/${req.file.filename}` });
+  res.json({ imageUrl: req.file.path }); // Cloudinary URL'si
 });
 
 // Error handling middleware
